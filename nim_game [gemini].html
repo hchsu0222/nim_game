@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nim Game - 組合賽局模擬器</title>
+    <style>
+        :root {
+            --primary: #2c3e50;
+            --accent: #2980b9;
+            --bg: #f4f7f6;
+            --text: #34495e;
+            --win: #27ae60;
+            --lose: #c0392b;
+        }
+        body {
+            font-family: "Microsoft JhengHei", -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            max-width: 600px;
+            width: 100%;
+            background: white;
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+        }
+        h1 { text-align: center; color: var(--primary); margin: 0 0 10px 0; font-size: 1.5em; }
+        
+        .setup-group { background: #fff; border: 2px solid #dfe6e9; margin-bottom: 8px; padding: 10px; border-radius: 8px; }
+        label { display: block; margin-bottom: 4px; font-weight: bold; font-size: 0.9em; }
+        input, select { width: 100%; padding: 8px; border: 2px solid #bdc3c7; border-radius: 6px; box-sizing: border-box; font-size: 1em; }
+        
+        button {
+            width: 100%; padding: 10px; background-color: var(--accent); color: white;
+            border: none; border-radius: 6px; font-size: 16px; font-weight: bold;
+            cursor: pointer; margin-top: 8px; transition: background 0.1s;
+        }
+        button:active { filter: brightness(0.9); transform: translateY(1px); }
+        button.secondary { background-color: #95a5a6; }
+        
+        #game-area { display: none; }
+        .pile {
+            background: white; padding: 12px; margin-bottom: 10px;
+            border-radius: 10px; border: 2px solid #ecf0f1; cursor: pointer; position: relative;
+            user-select: none; -webkit-tap-highlight-color: transparent; transition: border-color 0.2s;
+        }
+        .pile:hover:not(.disabled) { border-color: #bdc3c7; }
+        .pile.selected { border-color: var(--accent); background: #ebf8ff; box-shadow: 0 0 8px rgba(41, 128, 185, 0.2); }
+        .pile.disabled { opacity: 0.4; cursor: not-allowed; filter: grayscale(1); }
+        
+        .pile.ai-move-flash { animation: flash 0.6s ease-out; }
+        @keyframes flash { 0% { background-color: #f1c40f; transform: scale(1.02); } 100% { background-color: white; transform: scale(1); } }
+
+        .pile-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
+        .stones-visual { display: flex; flex-wrap: wrap; gap: 4px; }
+        .stone { width: 18px; height: 18px; background-color: var(--primary); border-radius: 50%; }
+
+        .move-area { background: #fff; padding: 15px; border-radius: 12px; margin-top: 10px; border: 2px solid var(--accent); }
+        
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.6); z-index: 1000; display: flex; justify-content: center; align-items: center;
+        }
+        .modal-content {
+            background: white; padding: 25px; border-radius: 12px; text-align: center; width: 80%; max-width: 320px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        .result-title { font-size: 1.6em; margin: 0 0 10px 0; font-weight: bold; }
+        .win { color: var(--win); } .lose { color: var(--lose); }
+        
+        .status-bar {
+            text-align: center; font-weight: bold; margin-bottom: 10px; padding: 10px;
+            background: #fff3cd; color: #333; border-radius: 6px; font-size: 0.95em; transition: background 0.3s;
+        }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+<div class="container" id="setup-screen">
+    <h1>Nim Game</h1>
+    <div class="setup-group">
+        <label>勝敗條件</label>
+        <select id="winCondition">
+            <option value="normal">正規賽局 (無法行動者敗)</option>
+            <option value="misere">殊死賽局 (無法行動者勝)</option>
+        </select>
+    </div>
+    <div class="setup-group">
+        <label>對戰模式</label>
+        <div style="display:flex; gap:5px;">
+            <select id="gameMode" onchange="toggleTurnSelect()" style="flex:1;">
+                <option value="pve">與 AI 對戰</option>
+                <option value="pvp">雙人對戰</option>
+            </select>
+            <select id="firstPlayer" style="flex:1;">
+                <option value="player">玩家先手</option>
+                <option value="ai">AI 先手</option>
+            </select>
+        </div>
+    </div>
+    <div id="piles-config"></div>
+    <div style="display:flex; gap:5px;">
+        <button onclick="addPileConfig()" class="secondary">+ 增加一堆</button>
+        <button onclick="startGame()">開始遊戲</button>
+    </div>
+</div>
+
+<div class="container" id="game-area">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+        <button onclick="backToSetup()" class="secondary" style="width:auto; padding:6px 12px; font-size:0.9em; margin:0;">設定</button>
+        <div id="mode-badge" style="font-size:0.8em; font-weight:bold; background:#eee; padding:5px 10px; border-radius:10px;"></div>
+        <button onclick="restartGame()" class="secondary" style="width:auto; padding:6px 12px; font-size:0.9em; margin:0;">重來</button>
+    </div>
+    <div id="status-display" class="status-bar" style="margin-top:10px;"></div>
+    <div id="piles-display" style="position:relative;"></div>
+    
+    <div id="action-area" class="move-area hidden">
+        <p style="margin:0 0 10px 0; font-weight:bold; color:var(--accent);">從這堆移除多少顆？</p>
+        <div id="discrete-moves" style="display:flex; flex-wrap:wrap; gap:5px;" class="hidden"></div>
+        <div id="any-moves" class="hidden" style="display:flex; gap:5px; align-items:center;">
+            <input type="range" id="move-slider" min="1" step="1" oninput="syncInput(this.value)" style="flex:1;">
+            <input type="number" id="move-input" min="1" style="width:60px; text-align:center; font-weight:bold;" oninput="syncSlider(this.value)">
+            <button onclick="confirmInputMove()" style="width:auto; margin:0;">確認</button>
+        </div>
+        <button onclick="cancelSelection()" class="secondary" style="margin-top:8px; width:100%;">取消選擇</button>
+    </div>
+</div>
+
+<script>
+    const AI_DELAY = 600; 
+    let aiTimeoutId = null;
+    let modalTimeoutId = null;
+
+    let piles = [];
+    let isAiMode = true;
+    let isPlayerTurn = true; 
+    let currentPlayerName = "玩家";
+    let isMisere = false; 
+    let isGameLocked = false; 
+    let selectedPileIndex = -1;
+
+    let pileConfigs = [{count: 7, isStandard: true, rules: ""}];
+
+    function renderSetup() {
+        const container = document.getElementById('piles-config');
+        container.innerHTML = '';
+        pileConfigs.forEach((config, index) => {
+            const div = document.createElement('div');
+            div.className = 'setup-group';
+            div.innerHTML = `
+                <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                    <span style="font-weight:bold;">第 ${index + 1} 堆</span>
+                    ${pileConfigs.length > 1 ? `<span onclick="removePile(${index})" style="color:red; cursor:pointer;">✕</span>` : ''}
+                </div>
+                <div style="display:flex; gap:5px;">
+                    <input type="number" value="${config.count}" min="1" max="99999" onchange="updateConfig(${index}, 'count', this.value)" placeholder="數量">
+                    <label style="display:flex; align-items:center; cursor:pointer; font-weight:normal; white-space:nowrap; font-size:0.9em;">
+                        <input type="checkbox" ${config.isStandard ? 'checked' : ''} onchange="updateConfig(${index}, 'isStandard', this.checked)" style="width:auto; margin-right:4px;">
+                        任意取
+                    </label>
+                </div>
+                <div style="display: ${config.isStandard ? 'none' : 'block'}; margin-top:5px;">
+                    <input type="text" value="${config.rules}" placeholder="規則 (如: 1,3,5)" onchange="updateConfig(${index}, 'rules', this.value)">
+                </div>
+            `;
+            container.appendChild(div);
+        });
+    }
+
+    function toggleTurnSelect() {
+        document.getElementById('firstPlayer').style.display = (document.getElementById('gameMode').value === 'pve') ? 'block' : 'none';
+    }
+    
+    function addPileConfig() { pileConfigs.push({count: 5, isStandard: true, rules: ""}); renderSetup(); }
+    function removePile(index) { if(pileConfigs.length > 1) { pileConfigs.splice(index, 1); renderSetup(); } }
+    
+    function updateConfig(i, k, v) { 
+        if (k === 'count') {
+            pileConfigs[i].count = Math.min(99999, Math.max(1, parseInt(v) || 1));
+        }
+        if (k === 'isStandard') pileConfigs[i].isStandard = (v === true || v === 'true');
+        if (k === 'rules') pileConfigs[i].rules = v;
+        renderSetup(); 
+    }
+
+    // $O(N \cdot K)$ 高效 DP MEX 計算
+    let grundyCache = {};
+    function calculateGrundy(count, rules, isStandard) {
+        if (isStandard) return count; 
+        
+        const key = rules.join(',');
+        if (!grundyCache[key]) grundyCache[key] = [0]; 
+        
+        let cache = grundyCache[key];
+        if (cache.length > count) return cache[count];
+
+        let seen = new Uint8Array(rules.length + 1);
+        
+        while (cache.length <= count) {
+            let currentCount = cache.length;
+            seen.fill(0); 
+            
+            for (let i = 0; i < rules.length; i++) {
+                let m = rules[i];
+                if (currentCount - m >= 0) {
+                    let g = cache[currentCount - m];
+                    if (g < seen.length) seen[g] = 1;
+                }
+            }
+            
+            let mex = 0;
+            while (mex < seen.length && seen[mex]) mex++; 
+            cache.push(mex);
+        }
+        return cache[count];
+    }
+
+    function startGame() {
+        clearTimeout(aiTimeoutId);
+        clearTimeout(modalTimeoutId); 
+        closeModal();
+        
+        grundyCache = {}; 
+        isAiMode = (document.getElementById('gameMode').value === 'pve');
+        isMisere = (document.getElementById('winCondition').value === 'misere');
+        const first = document.getElementById('firstPlayer').value;
+        isPlayerTurn = isAiMode ? (first === 'player') : true;
+        currentPlayerName = isAiMode ? (isPlayerTurn ? "玩家" : "AI") : "玩家 1";
+        isGameLocked = false;
+        selectedPileIndex = -1;
+        document.getElementById('action-area').classList.add('hidden');
+
+        // UI 與邏輯雙向同步，防止殘留廢字元
+        piles = pileConfigs.map(c => {
+            let rules = [];
+            let isStd = c.isStandard;
+            if (!isStd) {
+                let parsed = c.rules.split(/[, ]+/).map(n=>parseInt(n)).filter(n=>!isNaN(n)&&n>0);
+                rules = [...new Set(parsed)].sort((a,b)=>a-b);
+                c.rules = rules.join(", "); 
+            }
+            if (!isStd && rules.length === 0) {
+                isStd = true;
+                c.isStandard = true;
+                c.rules = "";
+            }
+            return { current: c.count, initialCount: c.count, isStandard: isStd, rules: rules };
+        });
+
+        document.getElementById('setup-screen').style.display = 'none';
+        document.getElementById('game-area').style.display = 'block';
+        document.getElementById('mode-badge').innerText = isMisere ? "殊死賽局" : "正規賽局";
+        
+        updateStatus();
+        renderPiles();
+        
+        // 極端防護：一開局設定就死局
+        if (!hasAnyValidMove()) {
+            checkEndgame(otherPlayer(currentPlayerName));
+            return;
+        }
+
+        if (isAiMode && !isPlayerTurn) {
+            isGameLocked = true;
+            updateStatus("AI 思考中...");
+            aiTimeoutId = setTimeout(aiTurn, AI_DELAY);
+        }
+    }
+
+    function closeModal() { const m = document.querySelector('.modal-overlay'); if(m) m.remove(); }
+    
+    function restartGame() { 
+        clearTimeout(aiTimeoutId); 
+        clearTimeout(modalTimeoutId); 
+        closeModal(); 
+        startGame(); 
+    }
+    
+    function backToSetup() { 
+        clearTimeout(aiTimeoutId);
+        clearTimeout(modalTimeoutId); 
+        closeModal(); 
+        selectedPileIndex = -1; 
+        isGameLocked = false; 
+        document.getElementById('game-area').style.display = 'none'; 
+        document.getElementById('setup-screen').style.display = 'block'; 
+        renderSetup(); 
+    }
+    
+    function hasAnyValidMove() {
+        for(let p of piles) {
+            if (p.current === 0) continue;
+            if (p.isStandard) return true; 
+            if (p.rules.length > 0 && p.rules[0] <= p.current) return true;
+        }
+        return false;
+    }
+
+    function updateStatus(msg) {
+        const bar = document.getElementById('status-display');
+        if (msg) { 
+            bar.innerText = msg; 
+            bar.style.background = (msg.includes("思考中")) ? "#e0e0e0" : "#d4edda";
+            return; 
+        }
+        bar.innerText = isAiMode ? (isPlayerTurn ? "輪到你了！請選擇一堆石子" : "AI 思考中...") : `現在輪到 ${currentPlayerName}`;
+        bar.style.background = (isAiMode && !isPlayerTurn) ? "#e0e0e0" : "#fff3cd";
+    }
+
+    function renderPiles(aiMovedIdx = -1) {
+        const container = document.getElementById('piles-display');
+        container.innerHTML = '';
+        piles.forEach((p, i) => {
+            const div = document.createElement('div');
+            div.className = `pile ${selectedPileIndex === i ? 'selected' : ''} ${aiMovedIdx === i ? 'ai-move-flash' : ''}`;
+            div.id = `pile-${i}`;
+            
+            let isPileDead = (p.current === 0) || (!p.isStandard && p.rules.every(r => r > p.current));
+            if (isPileDead) div.classList.add('disabled');
+            else if (!isGameLocked && (!isAiMode || isPlayerTurn)) { div.onclick = () => selectPile(i); }
+            
+            let visual = '';
+            if (p.initialCount <= 30) { 
+                visual = `<div class="stones-visual">${Array(p.current).fill('<div class="stone"></div>').join('')}</div>`; 
+            } else { 
+                const pct = Math.max(0, Math.min(100, Math.round((p.current / p.initialCount) * 100))); 
+                visual = `<div style="height:10px; background:#eee; width:100%; border-radius:5px; overflow:hidden;"><div style="height:100%; background:var(--primary); width:${pct}%; transition: width 0.3s ease-out;"></div></div><div style="font-size:0.85em;color:#888;margin-top:3px;text-align:right;">${p.current} 顆</div>`; 
+            }
+            
+            div.innerHTML = `<div class="pile-header"><span>第 ${i+1} 堆 <span style="font-size:0.85em; font-weight:bold; color:var(--accent);">(${p.current})</span></span></div>${visual}`;
+            container.appendChild(div);
+        });
+    }
+
+    function selectPile(i) {
+        if (isGameLocked) return;
+        selectedPileIndex = i;
+        renderPiles();
+        
+        const action = document.getElementById('action-area');
+        const disc = document.getElementById('discrete-moves');
+        const any = document.getElementById('any-moves');
+        
+        action.classList.remove('hidden'); disc.classList.add('hidden'); any.classList.add('hidden');
+
+        if (piles[i].isStandard) {
+            any.classList.remove('hidden');
+            const slider = document.getElementById('move-slider');
+            const input = document.getElementById('move-input');
+            slider.max = piles[i].current; slider.value = 1; 
+            input.max = piles[i].current; input.value = 1;
+            
+            input.onkeydown = function(e) { if (e.key === 'Enter') confirmInputMove(); };
+        } else {
+            disc.classList.remove('hidden'); disc.innerHTML = '';
+            piles[i].rules.forEach(m => {
+                if(m <= piles[i].current) {
+                    const b = document.createElement('button'); b.innerText = `取 ${m} 顆`; b.style.flex = "1";
+                    b.onclick = () => executeMove(m); disc.appendChild(b);
+                }
+            });
+        }
+        if(window.innerHeight < 600) setTimeout(()=>action.scrollIntoView({behavior:'smooth', block:'end'}), 50);
+    }
+    
+    function syncInput(v) { 
+        document.getElementById('move-input').value = v; 
+    }
+    
+    function syncSlider(v) { 
+        const inputEl = document.getElementById('move-input');
+        const sliderEl = document.getElementById('move-slider');
+        const max = parseInt(sliderEl.max);
+        let val = parseInt(v);
+        
+        // 絕對夾擠防禦：防止空白或極端輸入破壞 UI
+        if (isNaN(val)) return;
+        if (val > max) val = max;
+        if (val < 1) val = 1; 
+        
+        inputEl.value = val;
+        sliderEl.value = val;
+    }
+    
+    function confirmInputMove() {
+        if (selectedPileIndex === -1 || isGameLocked) return;
+        
+        const v = parseInt(document.getElementById('move-input').value);
+        if (isNaN(v) || v < 1) { alert('請輸入有效數字'); return; }
+        if (v > piles[selectedPileIndex].current) { alert('不能超過該堆剩餘石子數！'); return; }
+        executeMove(v);
+    }
+    
+    function cancelSelection(shouldRender = true) { 
+        selectedPileIndex = -1; 
+        document.getElementById('action-area').classList.add('hidden'); 
+        if (shouldRender) renderPiles(); 
+    }
+
+    function otherPlayer(name) {
+        if (isAiMode) return name === "玩家" ? "AI" : "玩家";
+        return name === "玩家 1" ? "玩家 2" : "玩家 1";
+    }
+
+    // --- 無偏賽局終局判定器 (Axiom of Impartial Games) ---
+    function checkEndgame(lastMoverName) {
+        if (!hasAnyValidMove()) {
+            const totalStones = piles.reduce((a,b) => a + b.current, 0);
+            const isTakenFinish = (totalStones === 0);
+            finishGame(lastMoverName, isTakenFinish);
+            return true;
+        }
+        return false;
+    }
+
+    function finishGame(lastMover, isTakenFinish) {
+        isGameLocked = true;
+        
+        const statusBar = document.getElementById('status-display');
+        statusBar.innerText = "遊戲結束";
+        statusBar.style.background = "#e0e0e0";
+
+        let title = "", msg = "", cls = "";
+        let nextPlayer = otherPlayer(lastMover);
+        let winner = !isMisere ? lastMover : nextPlayer;
+
+        if (isAiMode) {
+            if (winner === "玩家") {
+                title = "你贏了！"; cls = "win";
+            } else {
+                title = "你輸了！"; cls = "lose";
+            }
+        } else {
+            title = winner + " 獲勝！";
+            cls = "win";
+        }
+
+        if (isTakenFinish) {
+            msg = !isMisere ? `${lastMover} 取走了最後一顆石子。` : `${lastMover} 被迫取走最後一顆石子 (殊死規則)。`;
+        } else {
+            msg = !isMisere ? `${nextPlayer} 無路可走，${lastMover} 獲勝。` : `${nextPlayer} 無路可走 (殊死規則：無法行動者獲勝)。`;
+        }
+
+        modalTimeoutId = setTimeout(() => {
+            const modal = document.createElement('div');
+            modal.className = 'modal-overlay';
+            modal.innerHTML = `
+                <div class="modal-content">
+                    <div class="result-title ${cls}">${title}</div>
+                    <div style="font-size:1.1em; margin-bottom:15px; color:#555;">${msg}</div>
+                    <button onclick="restartGame()">再玩一次</button>
+                    <button onclick="backToSetup()" class="secondary">修改設定</button>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }, 300);
+    }
+
+    function executeMove(amount) {
+        if (selectedPileIndex === -1 || isGameLocked) return;
+
+        let currentMover = currentPlayerName;
+        piles[selectedPileIndex].current -= amount;
+        cancelSelection(false);
+
+        if (checkEndgame(currentMover)) { 
+            renderPiles(); 
+            return; 
+        }
+
+        if (isAiMode) {
+            isPlayerTurn = false;
+            currentPlayerName = "AI";
+            isGameLocked = true;
+            updateStatus("AI 思考中...");
+            renderPiles();
+            aiTimeoutId = setTimeout(aiTurn, AI_DELAY);
+        } else {
+            currentPlayerName = (currentPlayerName === "玩家 1") ? "玩家 2" : "玩家 1";
+            updateStatus();
+            renderPiles();
+        }
+    }
+
+    // 協助 AI 預判步數生死 (1-Ply Simulator)
+    function checkMoveEndsGame(idx, amt) {
+        piles[idx].current -= amt;
+        const valid = hasAnyValidMove();
+        piles[idx].current += amt;
+        return !valid;
+    }
+
+    function aiTurn() {
+        let pileGrundys = [], nimSum = 0;
+        
+        const activePiles = piles.filter(p => {
+            if (p.isStandard) return p.current > 0;
+            return p.rules.some(r => r <= p.current);
+        });
+        
+        const allStandard = activePiles.every(p => p.isStandard);
+
+        piles.forEach(p => {
+            let g = calculateGrundy(p.current, p.rules, p.isStandard);
+            pileGrundys.push(g); nimSum ^= g;
+        });
+
+        let targetIdx = -1, removeAmt = -1;
+
+        // --- 策略 1: 殊死終局策略 (僅限全為標準任意取的狀態) ---
+        if (isMisere && allStandard) {
+            const largePiles = activePiles.filter(p => p.current > 1);
+            if (largePiles.length <= 1) {
+                if (largePiles.length === 1) {
+                    const bigPile = largePiles[0];
+                    const bigIdx = piles.indexOf(bigPile);
+                    const onesCount = activePiles.filter(p => p.current === 1).length;
+                    
+                    const wantLeave = (onesCount % 2 === 1) ? 0 : 1;
+                    const needed = bigPile.current - wantLeave;
+                    
+                    if (needed >= 1 && needed <= bigPile.current) {
+                        removeAmt = needed; targetIdx = bigIdx;
+                    } else {
+                        removeAmt = bigPile.current; targetIdx = bigIdx;
+                    }
+                } else {
+                    for (let i = 0; i < piles.length; i++) {
+                        if (piles[i].current > 0) { targetIdx = i; removeAmt = 1; break; }
+                    }
+                }
+            }
+        }
+
+        // --- 策略 2: 核心必勝策略 (Normal Play / 混搭自訂規則的 Misere 中盤) ---
+        if (targetIdx === -1 && nimSum !== 0) {
+            for (let i = 0; i < piles.length; i++) {
+                const targetG = pileGrundys[i] ^ nimSum;
+                if (targetG >= pileGrundys[i]) continue;
+
+                if (piles[i].isStandard) {
+                    const needed = piles[i].current - targetG;
+                    if (needed >= 1 && needed <= piles[i].current) {
+                        removeAmt = needed; targetIdx = i; break;
+                    }
+                } else {
+                    for (let m of piles[i].rules) {
+                        if (m > piles[i].current) continue;
+                        if (calculateGrundy(piles[i].current - m, piles[i].rules, false) === targetG) {
+                            removeAmt = m; targetIdx = i; break;
+                        }
+                    }
+                    if (targetIdx !== -1) break;
+                }
+            }
+        }
+
+        // --- 策略 3: 必敗局拖延策略 ---
+        if (targetIdx === -1) {
+            if (activePiles.length > 0) {
+                const p = activePiles[Math.floor(Math.random() * activePiles.length)];
+                targetIdx = piles.indexOf(p);
+                removeAmt = p.isStandard ? 1 : p.rules[0];
+            } else {
+                checkEndgame(otherPlayer("AI")); return; 
+            }
+        }
+
+        // --- 終極 1-Ply 前瞻本能覆寫 (Survival / Killer Override) ---
+        if (isMisere && checkMoveEndsGame(targetIdx, removeAmt)) {
+            let foundSafe = false;
+            for (let i = 0; i < piles.length; i++) {
+                if (piles[i].current === 0) continue;
+                let p = piles[i];
+                if (p.isStandard) {
+                    if (!checkMoveEndsGame(i, 1)) { targetIdx = i; removeAmt = 1; foundSafe = true; break; }
+                } else {
+                    for (let m of p.rules) {
+                        if (m <= p.current && !checkMoveEndsGame(i, m)) { targetIdx = i; removeAmt = m; foundSafe = true; break; }
+                    }
+                }
+                if (foundSafe) break;
+            }
+        } else if (!isMisere && !checkMoveEndsGame(targetIdx, removeAmt)) {
+             let foundWin = false;
+             for (let i = 0; i < piles.length; i++) {
+                if (piles[i].current === 0) continue;
+                let p = piles[i];
+                if (p.isStandard) {
+                    if (checkMoveEndsGame(i, p.current)) { targetIdx = i; removeAmt = p.current; foundWin = true; break; }
+                } else {
+                    for (let m of p.rules) {
+                        if (m <= p.current && checkMoveEndsGame(i, m)) { targetIdx = i; removeAmt = m; foundWin = true; break; }
+                    }
+                }
+                if (foundWin) break;
+             }
+        }
+
+        if (removeAmt === null || removeAmt <= 0) { checkEndgame(otherPlayer("AI")); return; }
+
+        let currentMover = "AI"; 
+        piles[targetIdx].current -= removeAmt;
+        selectedPileIndex = -1;
+
+        if (checkEndgame(currentMover)) { 
+            renderPiles(targetIdx); 
+            return; 
+        }
+
+        isPlayerTurn = true;
+        currentPlayerName = "玩家";
+        isGameLocked = false;
+
+        updateStatus(`AI 從第 ${targetIdx + 1} 堆取走了 ${removeAmt} 顆。換你了！`);
+        renderPiles(targetIdx);
+    }
+
+    renderSetup(); toggleTurnSelect();
+</script>
+</body>
+</html>
